@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { parseYouTubeId } from "../lib/parseYoutube";
-import { scoreVideo, ScoreResponse } from "../lib/api";
+import { scoreVideo, scoreUpload, ScoreResponse } from "../lib/api";
 
 import ProgressTimeline, { StageKey } from "./ProgressTimeline";
 import HistoryPanel, { HistoryItem } from "./HistoryPanel";
@@ -12,6 +12,8 @@ import ContributionCard from "./ContributionCard";
 
 const HISTORY_KEY = "yc_predictor_history_v2";
 const HISTORY_MAX = 12;
+
+type Mode = "link" | "upload";
 
 function loadHistory(): HistoryItem[] {
   try {
@@ -32,8 +34,12 @@ function saveHistory(items: HistoryItem[]) {
 }
 
 export default function ScoreForm() {
+  const [mode, setMode] = useState<Mode>("link");
+
   const [input, setInput] = useState("");
   const [youtubeId, setYoutubeId] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const [stage, setStage] = useState<StageKey>("idle");
   const [loading, setLoading] = useState(false);
@@ -63,23 +69,15 @@ export default function ScoreForm() {
     setStage(success ? "done" : "idle");
   }
 
-  async function onScore() {
+  // Shared result + history handling for both the link and upload paths.
+  async function runScoring(fn: () => Promise<ScoreResponse>) {
     setErr(null);
     setResult(null);
-
-    const id = parseYouTubeId(input);
-    setYoutubeId(id);
-
-    if (!id) {
-      setErr("Could not parse a valid YouTube ID. Paste an 11-char ID or a YouTube URL.");
-      return;
-    }
-
     setLoading(true);
     scheduleStages();
 
     try {
-      const out = await scoreVideo(id);
+      const out = await fn();
       setResult(out);
       finishStages(true);
 
@@ -103,7 +101,27 @@ export default function ScoreForm() {
     }
   }
 
+  async function onScore() {
+    const id = parseYouTubeId(input);
+    setYoutubeId(id);
+    if (!id) {
+      setErr("Could not parse a valid YouTube ID. Paste an 11-char ID or a YouTube URL.");
+      setResult(null);
+      return;
+    }
+    await runScoring(() => scoreVideo(id));
+  }
+
+  async function onScoreUpload() {
+    if (!file) {
+      setErr("Choose a video file first.");
+      return;
+    }
+    await runScoring(() => scoreUpload(file));
+  }
+
   function onPickFromHistory(id: string) {
+    setMode("link");
     setInput(id);
     setYoutubeId(id);
   }
@@ -119,38 +137,104 @@ export default function ScoreForm() {
   }, [result]);
 
   return (
-    <div style={{ marginTop: 18 }}>
-      <div className="row">
-        <input
-          className="input"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="YouTube ID or URL (e.g. vtdm40KJyO4 or https://www.youtube.com/watch?v=vtdm40KJyO4)"
-        />
-        <button className="button" onClick={onScore} disabled={loading}>
-          {loading ? "Scoring..." : "Score"}
+    <div>
+      <div className="mode-toggle" role="tablist" aria-label="Input source">
+        <button
+          role="tab"
+          aria-selected={mode === "link"}
+          className={`mode-tab${mode === "link" ? " on" : ""}`}
+          onClick={() => setMode("link")}
+        >
+          YouTube link
+        </button>
+        <button
+          role="tab"
+          aria-selected={mode === "upload"}
+          className={`mode-tab${mode === "upload" ? " on" : ""}`}
+          onClick={() => setMode("upload")}
+        >
+          Upload video
         </button>
       </div>
 
-      <div className="small" style={{ marginTop: 10 }}>
-        Parsed ID: <b>{youtubeId ?? "—"}</b>
-      </div>
+      {mode === "link" ? (
+        <>
+          <div className="row">
+            <input
+              className="input"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="YouTube ID or URL (e.g. vtdm40KJyO4 or https://www.youtube.com/watch?v=vtdm40KJyO4)"
+            />
+            <button className="button" onClick={onScore} disabled={loading}>
+              {loading ? "Scoring…" : "Score"}
+            </button>
+          </div>
+          <div className="parsed-hint">
+            Parsed ID <b>{youtubeId ?? "—"}</b>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="row">
+            <button
+              className={`filepick${file ? " has-file" : ""}`}
+              onClick={() => fileRef.current?.click()}
+              disabled={loading}
+            >
+              {file ? file.name : "Choose a video file…"}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="video/*"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+            <button className="button" onClick={onScoreUpload} disabled={loading || !file}>
+              {loading ? "Scoring…" : "Score"}
+            </button>
+          </div>
+          <div className="parsed-hint">
+            File <b>{file ? `${file.name} · ${(file.size / 1e6).toFixed(1)} MB` : "—"}</b>
+          </div>
+        </>
+      )}
 
       <ProgressTimeline stage={loading ? stage : "idle"} error={err} />
 
-      {result ? (
-        <div className="card" style={{ marginTop: 16 }}>
-          <div className="row" style={{ justifyContent: "space-between" }}>
+      {result && probPct !== null ? (
+        <div className="result">
+          <div className="result__head">
             <div>
-              <div className="small">YC-like probability</div>
-              <div className="metric">{probPct}%</div>
-              <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-                Raw: {result.yc_like_probability.toFixed(4)} • {result.label}
+              <p className="section-label">YC-like probability</p>
+              <div className="metric">
+                {probPct}
+                <span className="metric__unit">%</span>
               </div>
             </div>
-            <div style={{ alignSelf: "flex-start" }}>
-              <ConfidenceBadge label={result.confidence_label} />
+            <ConfidenceBadge label={result.confidence_label} />
+          </div>
+
+          <div className="gauge">
+            <div className="gauge__track">
+              <span className="gauge__fill" style={{ width: `${probPct}%` }} />
+              <span className="gauge__marker" style={{ left: `${probPct}%` }} />
             </div>
+            <div className="gauge__ticks" aria-hidden="true">
+              {[0, 25, 50, 75, 100].map((t) => (
+                <span key={t} className="gauge__tick" style={{ left: `${t}%` }}>
+                  {t}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="result__raw">
+            raw {result.yc_like_probability.toFixed(4)} · {result.label}
           </div>
         </div>
       ) : null}

@@ -1,5 +1,7 @@
 "use client";
 
+import ConfidenceBadge from "./ConfidenceBadge";
+
 export type HistoryItem = {
   youtube_id: string;
   probability: number;
@@ -22,47 +24,30 @@ export default function HistoryPanel({
   onClear: () => void;
 }) {
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <div>
-          <div style={{ fontWeight: 700 }}>History</div>
-          <div className="small">Saved locally in your browser</div>
-        </div>
-        <button className="button" onClick={onClear} disabled={items.length === 0}>
+    <section className="history">
+      <div className="history__head">
+        <p className="section-label">History</p>
+        <button className="linkbtn" onClick={onClear} disabled={items.length === 0}>
           Clear
         </button>
       </div>
 
       {items.length === 0 ? (
-        <div className="small" style={{ marginTop: 12 }}>
-          No runs yet.
-        </div>
+        <div className="small history__empty">No runs yet. Scored videos are saved locally in your browser.</div>
       ) : (
-        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+        <div>
           {items.map((it) => (
-            <button
-              key={it.at}
-              className="card"
-              onClick={() => onPick(it.youtube_id)}
-              style={{
-                textAlign: "left",
-                cursor: "pointer",
-                background: "rgba(207, 207, 207, 0.83)",
-              }}
-            >
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div style={{ fontWeight: 700 }}>{it.youtube_id}</div>
-                <div style={{ fontWeight: 800 }}>
-                  {(it.probability * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div className="small" style={{ marginTop: 6 }}>
-                {it.confidence_label} • {fmtTime(it.at)}
+            <button key={it.at} className="hist-item" onClick={() => onPick(it.youtube_id)}>
+              <div className="hist-item__id">{it.youtube_id}</div>
+              <div className="hist-item__prob">{(it.probability * 100).toFixed(1)}%</div>
+              <div className="hist-item__meta">{fmtTime(it.at)}</div>
+              <div className="hist-item__conf">
+                <ConfidenceBadge label={it.confidence_label} />
               </div>
             </button>
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }

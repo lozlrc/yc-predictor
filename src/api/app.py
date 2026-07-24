@@ -2,7 +2,7 @@
 from pathlib import Path
 import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 import numpy as np
@@ -29,6 +29,7 @@ class ScoreResp(BaseModel):
     youtube_id: str
     yc_like_probability: float
     label: str
+    confidence_label: str
     transcript: str
     frame_features: dict
 
@@ -45,6 +46,17 @@ _sd = None
 
 def sigmoid(x: float) -> float:
     return float(1.0 / (1.0 + np.exp(-x)))
+
+
+def confidence_label(prob: float) -> str:
+    """Plain-language band for the probability (drives the UI badge)."""
+    if prob >= 0.65:
+        return "Likely to get accepted"
+    if prob >= 0.45:
+        return "Almost there"
+    if prob >= 0.30:
+        return "Borderline"
+    return "Unlikely"
 
 
 @app.on_event("startup")
@@ -86,18 +98,13 @@ def transcribe_wav(wav_path: Path) -> str:
     return " ".join(parts)
 
 
-@app.post("/score", response_model=ScoreResp)
-def score(req: ScoreReq):
-    if _model is None:
-        raise HTTPException(status_code=400, detail="Model not trained. Run: python3 -m src.train.train_text")
+def _score_video(video_path: Path, ident: str) -> ScoreResp:
+    """Run the frames + transcript pipeline on a local video file and score it.
 
-    yt = req.youtube_id.strip()
-    if not yt:
-        raise HTTPException(status_code=400, detail="youtube_id is required.")
-
-    video_path = download_youtube(yt, TMP_VIDEOS)
-
-    frame_dir = TMP_FRAMES / yt
+    Shared by the YouTube path (which downloads first) and the direct-upload path.
+    `ident` is used to namespace extracted frames and to label the result.
+    """
+    frame_dir = TMP_FRAMES / ident
     frames = extract_first_n_frames(video_path, frame_dir, n=10, fps=1)
     frame_summary = summarize_first_frames(frames)
 
@@ -129,9 +136,43 @@ def score(req: ScoreReq):
     label = "YC-like" if prob >= 0.50 else "Not YC-like"
 
     return ScoreResp(
-        youtube_id=yt,
+        youtube_id=ident,
         yc_like_probability=prob,
         label=label,
+        confidence_label=confidence_label(prob),
         transcript=transcript,
         frame_features=feats,
     )
+
+
+@app.post("/score", response_model=ScoreResp)
+def score(req: ScoreReq):
+    if _model is None:
+        raise HTTPException(status_code=400, detail="Model not trained. Run: python3 -m src.train.train_text")
+
+    yt = req.youtube_id.strip()
+    if not yt:
+        raise HTTPException(status_code=400, detail="youtube_id is required.")
+
+    video_path = download_youtube(yt, TMP_VIDEOS)
+    return _score_video(video_path, yt)
+
+
+@app.post("/score-upload", response_model=ScoreResp)
+async def score_upload(file: UploadFile = File(...)):
+    """Score a video the user uploads directly, skipping the YouTube download."""
+    if _model is None:
+        raise HTTPException(status_code=400, detail="Model not trained. Run: python3 -m src.train.train_text")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file.")
+
+    ensure_dirs()
+    name = file.filename or "upload.mp4"
+    suffix = Path(name).suffix or ".mp4"
+    ident = "".join(c if c.isalnum() else "_" for c in Path(name).stem)[:64] or "upload"
+    dest = TMP_VIDEOS / f"upload_{ident}{suffix}"
+    dest.write_bytes(data)
+
+    return _score_video(dest, ident)

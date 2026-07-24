@@ -40,3 +40,27 @@ export async function scoreVideo(youtubeId: string): Promise<ScoreResponse> {
 
   return (await res.json()) as ScoreResponse;
 }
+
+export async function scoreUpload(file: File): Promise<ScoreResponse> {
+  const base = process.env.NEXT_PUBLIC_API_BASE;
+  if (!base) throw new Error("NEXT_PUBLIC_API_BASE is not set in .env.local");
+
+  const form = new FormData();
+  form.append("file", file);
+
+  const res = await fetch(`${base}/score-upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.detail) detail = String(data.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+
+  return (await res.json()) as ScoreResponse;
+}
